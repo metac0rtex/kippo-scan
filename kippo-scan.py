@@ -6,6 +6,7 @@ import pexpect
 import sys
 import time
 import re
+import os
 
 def banner():
     print "--== Kippo Scanner ==--"
@@ -62,7 +63,7 @@ def tests(ip, port):
     if args.verbose == True:
         print "  [+] Score after Test 1: " + str(score)
 #    if args.verbose == True:
-#        print "[+] Test 2: Attempting login"
+#        print "[+] Test 3: Attempting login"
 #    login(ip,port)
     report(ip, port)
 
@@ -127,8 +128,17 @@ def login(ip,port):
     global score
     spawncmd = "ssh -p " + str(port) + " root@" + ip
     p = pexpect.spawn(spawncmd)
+
+
+
+
     log = file('pexpect.log','wb')
     p.logfile = log
+
+
+
+
+
     i = p.expect(['Are you sure you want to continue connecting', '.*[Pp]assword.*', pexpect.EOF])
     if i == 0:
         p.sendline('yes')
@@ -144,18 +154,20 @@ def login(ip,port):
     p.sendline('\003')
     p.sendline('\003')
     p.sendline('\003')
-    time.sleep(2)
+    time.sleep(3)
     p.sendline("hostname")
+    hostnamefile = file('kippo-hostname', 'w+b')
     p.expect(".*")
-    time.sleep(2)
+    os.popen("rm -f kippo-hostname")
+    time.sleep(3)
     p.sendline("ifconfig")
-    time.sleep(2)
+    time.sleep(3)
     p.expect(".*")
     p.sendline("ifconfig")
-    time.sleep(2)
+    time.sleep(3)
     p.expect(".*")
     p.sendline("cat /etc/passwd")
-    time.sleep(2)
+    time.sleep(3)
     p.expect(".*")
 
 def parsepexpect():
