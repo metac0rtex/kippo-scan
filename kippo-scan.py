@@ -1,5 +1,13 @@
 #!/usr/bin/env python
 
+
+#This must be one of the first imports or else we get threading error on completion
+from gevent import monkey
+monkey.patch_all()
+
+from gevent.pool import Pool
+from gevent import joinall
+
 import argparse
 import socket
 import pexpect
@@ -33,22 +41,20 @@ def args():
         print "\n[!] Can not specify both filename and IP address. Its one or the other"
         sys.exit(0)
 
-def parsefile(ipfile):
-    f = open(ipfile, "r")
-    for line in f:
-        if ":" in line:
-            ip = line.split(":", 1)[0]
-            portstr = line.split(":", 1)[1]
-            port = int(portstr)
-            if args.verbose == True:
-                print "[+] Checking: " + ip + ":" + str(port)
-            tests(ip, port)
-        if not ":" in line:
-            ip = line.strip()
-            if args.verbose == True:
-                print "[+] Checking: " + ip + ":22"
-            tests(ip, 22)
-    f.close()
+
+def parsefile(line):
+    if ":" in line:
+        ip = line.split(":", 1)[0]
+        portstr = line.split(":", 1)[1]
+        port = int(portstr)
+        if args.verbose == True:
+            print "[+] Checking: " + ip + ":" + str(port)
+        tests(ip, port)
+    if not ":" in line:
+        ip = line.strip()
+        if args.verbose == True:
+            print "[+] Checking: " + ip + ":22"
+        tests(ip, 22)
 
 
 def tests(ip, port):
@@ -69,6 +75,7 @@ def tests(ip, port):
 
 def bannergrab(ip, port):
     global score
+
     if args.verbose == True:
         print "  [+] Making raw socket connect to " + ip + ":" + str(port)
     s = socket.socket()
@@ -89,9 +96,9 @@ def bannergrab(ip, port):
         print e
 
 
-
 def test_protocolmismatch(ip, port):
     global score
+
     command = "DC801"
     if args.verbose == True:
         print "  [+] Making raw socket connect to " + ip + ":" + str(port)
@@ -106,6 +113,7 @@ def test_protocolmismatch(ip, port):
                 print "      " +  str(reply).strip()
         if args.verbose == True:
             print "    [+] Sending non SSH traffic"
+
         s.send(command*50)
         s.send("\n")
         reply = s.recv(512)
@@ -120,7 +128,6 @@ def test_protocolmismatch(ip, port):
                 print "      [-] Gave us \"protocol mismatch\" error or nothing back."
                 print "        [-] Seems to be a real SSH daemon"
 
-
     except Exception, e:
         print e
 
@@ -129,15 +136,8 @@ def login(ip,port):
     spawncmd = "ssh -p " + str(port) + " root@" + ip
     p = pexpect.spawn(spawncmd)
 
-
-
-
     log = file('pexpect.log','wb')
     p.logfile = log
-
-
-
-
 
     i = p.expect(['Are you sure you want to continue connecting', '.*[Pp]assword.*', pexpect.EOF])
     if i == 0:
@@ -186,22 +186,26 @@ def report(ip, port):
             log = ip + ":" + str(port) + "\n"
             with open(args.writefile, "a+") as f:
                 f.write(log)
-            f.close()
+
     if score < 100:
         print ip + ":" + str(port) + " is NOT a Kippo Honeypot"
     if 100 < score < 150:
         print ip + ":" + str(port) + " might be a Kippo Honeypot. Not 100%"
-    print "\n"
+    print ""
 
 def main():
+    global score
+
     args()
     banner()
+    pool = Pool(1000)
 
-    global score
     score = 0
 
     if args.file:
-        parsefile(args.file)
+        with open(args.file, "r") as f:
+            jobs = [pool.spawn(parsefile, line) for line in f]
+            joinall(jobs)
 
     else:
         ip = args.ip
