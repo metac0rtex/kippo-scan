@@ -1,5 +1,13 @@
 #!/usr/bin/env python
 
+
+#This must be one of the first imports or else we get threading error on completion
+from gevent import monkey
+monkey.patch_all()
+
+from gevent.pool import Pool
+from gevent import joinall
+
 import argparse
 import socket
 import pexpect
@@ -33,111 +41,72 @@ def args():
         print "\n[!] Can not specify both filename and IP address. Its one or the other"
         sys.exit(0)
 
-def parsefile(ipfile):
-    f = open(ipfile, "r")
-    for line in f:
-        if ":" in line:
-            ip = line.split(":", 1)[0]
-            portstr = line.split(":", 1)[1]
-            port = int(portstr)
-            if args.verbose == True:
-                print "[+] Checking: " + ip + ":" + str(port)
-            tests(ip, port)
-        if not ":" in line:
-            ip = line.strip()
-            if args.verbose == True:
-                print "[+] Checking: " + ip + ":22"
-            tests(ip, 22)
-    f.close()
-
+def parsefile(line):
+    if ":" in line:
+        ip = line.split(":", 1)[0]
+        portstr = line.split(":", 1)[1]
+        port = int(portstr)
+        tests(ip, port)
+    if not ":" in line:
+        ip = line.strip()
+        tests(ip, 22)
 
 def tests(ip, port):
-    global score
-    score = 0
-    if args.verbose == True:
-        print "[+] Test 1: Banner Grab"
-    bannergrab(ip, port)
-    if args.verbose == True:
-        print "[+] Test 2: Protocol mismatch"
-    test_protocolmismatch(ip,port)
-    if args.verbose == True:
-        print "  [+] Score after Test 1: " + str(score)
+    results1 = bannergrab(ip, port)
+    results2 = test_protocolmismatch(ip,port)
 #    if args.verbose == True:
 #        print "[+] Test 3: Attempting login"
-#    login(ip,port)
-    report(ip, port)
+#    login(ip,port,score)
+    report(ip, port, results1, results2)
 
 def bannergrab(ip, port):
-    global score
-    if args.verbose == True:
-        print "  [+] Making raw socket connect to " + ip + ":" + str(port)
+    ''' Check the banner for consistency with kippo '''
+
+    score = 0
     s = socket.socket()
     s.settimeout(10)
+
     try:
         s.connect((ip, port))
         reply = s.recv(30)
-        print "    [+] Banner we got was: "
-        print "      " + reply.strip()
         s.close()
-        if "SSH-2.0-OpenSSH_5.1p1 Debian-5" in reply:
-            print "    [+] Banner was consistent with Kippo"
-            score += 50
-        else:
-            print "    [-] Banner was not consistent with Kippo"
+    except Exception as e:
+        reply = "Error: " + str(e)
 
-    except Exception, e:
-        print e
+    if "SSH-2.0-OpenSSH_5.1p1 Debian-5" in reply:
+        score += 50
 
-
+    return (score, reply)
 
 def test_protocolmismatch(ip, port):
-    global score
+    ''' Test daemon\'s reply to nonSSH traffic '''
+
+    score = 0
     command = "DC801"
-    if args.verbose == True:
-        print "  [+] Making raw socket connect to " + ip + ":" + str(port)
     s = socket.socket()
+    s.settimeout(10)
+
     try:
         s.connect((ip, port))
-        s.settimeout(10)
-        reply = s.recv(512)
-        if reply:
-            if args.verbose == True:
-                print "    [+] Banner we got was: "
-                print "      " +  str(reply).strip()
-        if args.verbose == True:
-            print "    [+] Sending non SSH traffic"
         s.send(command*50)
         s.send("\n")
         reply = s.recv(512)
+        s.close()
+    except Exception as e:
+        reply = "Error: " + str(e)
 
+    if len(reply) != 0 and "Error: " not in reply:
         if "Protocol mismatch" not in reply:
-            if args.verbose == True:
-                print "      [+] Did not give us \"protocol mismatch\" error"
-                print "        [+] This is irregular"
             score += 100
-        if "Protocol mismatch" in reply or len(reply) == 0:
-            if args.verbose == True:
-                print "      [-] Gave us \"protocol mismatch\" error or nothing back."
-                print "        [-] Seems to be a real SSH daemon"
 
+    return (score, reply)
 
-    except Exception, e:
-        print e
-
-def login(ip,port):
-    global score
+def login(ip,port,score):
     spawncmd = "ssh -p " + str(port) + " root@" + ip
     p = pexpect.spawn(spawncmd)
 
-
-
-
     log = file('pexpect.log','wb')
     p.logfile = log
-
-
-
-
 
     i = p.expect(['Are you sure you want to continue connecting', '.*[Pp]assword.*', pexpect.EOF])
     if i == 0:
@@ -171,44 +140,65 @@ def login(ip,port):
     p.expect(".*")
 
 def parsepexpect():
-    global score
     f = open('pexpect.txt', 'r')
     hostname = re.compile('.*nas3:~#.*')
 
+def report(ip, port, results1, results2):
+    ''' Handle formatting and print output '''
 
-def report(ip, port):
-    global score
-    print "\n[REPORT]"
-    print "Current score is " + str(score)
+    score1 = results1[0]
+    reply1 = results1[1]
+    score2 = results2[0]
+    reply2 = results2[1]
+    score = score1 + score2
+
+    print "[+] Checking: " + ip + ":" + str(port)
+    print "[+] Test 1: Banner Grab"
+    print "[*]   Banner received: "
+    print "         " + reply1.strip()
+    if score1 == 50:
+        print "[*]   Banner was consistent with Kippo"
+    else:
+        print "[*]   Banner was NOT consistent with Kippo"
+    print "[*]   Score after banner test: " + str(score1)
+
+    print "[+] Test 2: Protocol mismatch"
+    print "[*]   Score after protocol mismatch test: " + str(score2)
+
+    print "\n          [REPORT]"
     if score >= 150:
         print ip + ":" + str(port) + " is a Kippo Honeypot"
         if args.writefile:
             log = ip + ":" + str(port) + "\n"
             with open(args.writefile, "a+") as f:
                 f.write(log)
-            f.close()
+
     if score < 100:
-        print ip + ":" + str(port) + " is NOT a Kippo Honeypot"
+        if args.verbose:
+            print ip + ":" + str(port) + " is NOT a Kippo Honeypot"
     if 100 < score < 150:
-        print ip + ":" + str(port) + " might be a Kippo Honeypot. Not 100%"
-    print "\n"
+        if args.verbose:
+            print ip + ":" + str(port) + " might be a Kippo Honeypot. Not 100%"
+    print ""
 
 def main():
+
     args()
     banner()
-
-    global score
-    score = 0
+    in_parallel = 1000
+    pool = Pool(in_parallel)
 
     if args.file:
-        parsefile(args.file)
+        with open(args.file, "r") as f:
+            jobs = [pool.spawn(parsefile, line) for line in f]
+            joinall(jobs)
 
-    else:
+    elif args.ip:
         ip = args.ip
         port = int(args.port)
 
-        print "[+] Checking: " + ip + ":" + str(port)
-
+        if args.verbose:
+            print "[+] Checking: " + ip + ":" + str(port)
         tests(ip, port)
 
 main()
